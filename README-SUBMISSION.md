@@ -1,5 +1,18 @@
 # ChainQuest Submission
 
+## Post-submission UI branch
+
+After the official assessment submission, I continued the implementation on the `post-submission-ui` branch.
+
+This branch includes:
+- wallet-connected quest creation
+- accept quest flow
+- submit deliverable flow
+- approve and payout flow
+- completed quest state
+- screenshots in `assets/`
+
+
 Name: Dawid Bubernak  
 Email: dawid.bubernak@gmail@gmail.com 
 GitHub repo: (https://github.com/BuberDev/chainquest-home-task)
