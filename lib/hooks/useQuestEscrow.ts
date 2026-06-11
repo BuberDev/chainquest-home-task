@@ -64,21 +64,21 @@ export function useQuest(questId: bigint | undefined) {
   const quest: QuestView | null =
     row && questId !== undefined
       ? {
-          id: questId,
-          poster: row[0],
-          worker: row[1],
-          title: row[2],
-          description: row[3],
-          reward: row[4],
-          token: row[5],
-          acceptDeadline: row[6],
-          reviewPeriod: row[7],
-          reviewDeadline: row[8],
-          status: row[9],
-          statusLabel: QUEST_STATUS_LABELS[row[9]] ?? "Open",
-          deliverableUri: row[10],
-          isEth: row[5].toLowerCase() === zeroAddress,
-        }
+        id: questId,
+        poster: row[0],
+        worker: row[1],
+        title: row[2],
+        description: row[3],
+        reward: row[4],
+        token: row[5],
+        acceptDeadline: row[6],
+        reviewPeriod: row[7],
+        reviewDeadline: row[8],
+        status: row[9],
+        statusLabel: QUEST_STATUS_LABELS[row[9]] ?? "Open",
+        deliverableUri: row[10],
+        isEth: row[5].toLowerCase() === zeroAddress,
+      }
       : null;
 
   return { quest, refetch, isLoading };
@@ -139,9 +139,93 @@ export function useQuestList() {
 /** Implement write helpers with useWriteContract + useWaitForTransactionReceipt. */
 export function useCreateQuest() {
   const { isConnected } = useAccount();
+  const { writeContractAsync,
+    data: hash,
+    isPending,
+    error: writeError
+  } = useWriteContract()
+
+  const { isLoading:isConfirming, isSuccess, error: receiptError } = useWaitForTransactionReceipt({
+    hash,
+    query: {
+      enabled: Boolean(hash)
+    }
+  })
+  const createEthQuest = useCallback(
+    async (input: {
+      title: string;
+      description: string;
+      rewardEth: string;
+      acceptDeadline: Date;
+      reviewPeriodHours: number;
+    }) => {
+      if (!isConnected) {
+        throw new Error("Connect MetaMask or another Web3 wallet first");
+      }
+
+      const reward = parseEther(input.rewardEth);
+
+      const acceptDeadlineSeconds = BigInt(
+        Math.floor(input.acceptDeadline.getTime() / 1000)
+      );
+
+      const reviewPeriodSeconds = BigInt(
+        Math.floor(input.reviewPeriodHours * 60 * 60)
+      );
+
+      if (!input.title.trim()) {
+        throw new Error("Title is required");
+      }
+
+      if (!input.description.trim()) {
+        throw new Error("Description is required");
+      }
+
+      if (reward <= 0n) {
+        throw new Error("Reward must be greater than 0");
+      }
+
+      if (acceptDeadlineSeconds <= BigInt(Math.floor(Date.now() / 1000))) {
+        throw new Error("Accept deadline must be in the future");
+      }
+
+      if (reviewPeriodSeconds <= 0n) {
+        throw new Error("Review period must be greater than 0");
+      }
+
+      return writeContractAsync({
+        address: QUEST_ESCROW_ADDRESS,
+        abi: questEscrowAbi,
+        functionName: "createQuest",
+        args: [
+          input.title,
+          input.description,
+          reward,
+          acceptDeadlineSeconds,
+          reviewPeriodSeconds,
+          zeroAddress,
+        ],
+        value: reward,
+      });
+    },
+    [isConnected, writeContractAsync]
+  );
+
+  return {
+    createEthQuest,
+    hash,
+    isPending,
+    isConfirming,
+    isSuccess,
+    error: writeError ?? receiptError,
+  };
+}
+
+export function useQuestActions(questId: bigint) {
+  const { isConnected } = useAccount();
 
   const {
-    writeContract,
+    writeContractAsync,
     data: hash,
     isPending,
     error: writeError,
@@ -157,47 +241,97 @@ export function useCreateQuest() {
       enabled: Boolean(hash),
     },
   });
-  
-  const createEthQuest = async (_input: {
-    title: string;
-    description: string;
-    rewardEth: string;
-    acceptDeadline: Date;
-    reviewPeriodHours: number;
-  }) => {
-    if (!isConnected) throw new Error("Connect MetaMask or another Web3 wallet first");
-    // TODO: useWriteContract → createQuest with value: parseEther(rewardEth), token: zeroAddress
-    throw new Error("TODO: implement useCreateQuest.createEthQuest");
-  };
 
-  return { createEthQuest, isPending: false };
-}
+  const ensureConnected = useCallback(() => {
+    if (!isConnected) {
+      throw new Error("Connect MetaMask or another Web3 wallet first");
+    }
+  }, [isConnected]);
 
-export function useQuestActions(questId: bigint) {
-  const accept = async () => {
-    // TODO: writeContract acceptQuest(questId)
-    throw new Error("TODO: implement accept");
-  };
-  const submit = async (_deliverableUri: string) => {
-    // TODO: writeContract submitWork(questId, deliverableUri)
-    throw new Error("TODO: implement submit");
-  };
-  const approve = async () => {
-    // TODO: writeContract approveAndPay(questId)
-    throw new Error("TODO: implement approve");
-  };
-  const claimTimeout = async () => {
-    // TODO: writeContract claimTimeoutPayout(questId)
-    throw new Error("TODO: implement claimTimeout");
-  };
-  const cancel = async () => {
-    // TODO: writeContract cancelQuest(questId)
-    throw new Error("TODO: implement cancel");
-  };
-  const refund = async () => {
-    // TODO: writeContract refundPoster(questId)
-    throw new Error("TODO: implement refund");
-  };
+  const accept = useCallback(async (): Promise<void> => {
+    ensureConnected();
 
-  return { accept, submit, approve, claimTimeout, cancel, refund, isPending: false };
+    await writeContractAsync({
+      address: QUEST_ESCROW_ADDRESS,
+      abi: questEscrowAbi,
+      functionName: "acceptQuest",
+      args: [questId],
+    });
+  }, [ensureConnected, writeContractAsync, questId]);
+
+  const submit = useCallback(
+    async (deliverableUri: string): Promise<void> => {
+      ensureConnected();
+
+      if (!deliverableUri.trim()) {
+        throw new Error("Deliverable URI is required");
+      }
+
+      await writeContractAsync({
+        address: QUEST_ESCROW_ADDRESS,
+        abi: questEscrowAbi,
+        functionName: "submitWork",
+        args: [questId, deliverableUri],
+      });
+    },
+    [ensureConnected, writeContractAsync, questId]
+  );
+
+  const approve = useCallback(async (): Promise<void> => {
+    ensureConnected();
+
+    await writeContractAsync({
+      address: QUEST_ESCROW_ADDRESS,
+      abi: questEscrowAbi,
+      functionName: "approveAndPay",
+      args: [questId],
+    });
+  }, [ensureConnected, writeContractAsync, questId]);
+
+  const claimTimeout = useCallback(async (): Promise<void> => {
+    ensureConnected();
+
+    await writeContractAsync({
+      address: QUEST_ESCROW_ADDRESS,
+      abi: questEscrowAbi,
+      functionName: "claimTimeoutPayout",
+      args: [questId],
+    });
+  }, [ensureConnected, writeContractAsync, questId]);
+
+  const cancel = useCallback(async (): Promise<void> => {
+    ensureConnected();
+
+    await writeContractAsync({
+      address: QUEST_ESCROW_ADDRESS,
+      abi: questEscrowAbi,
+      functionName: "cancelQuest",
+      args: [questId],
+    });
+  }, [ensureConnected, writeContractAsync, questId]);
+
+  const refund = useCallback(async (): Promise<void> => {
+    ensureConnected();
+
+    await writeContractAsync({
+      address: QUEST_ESCROW_ADDRESS,
+      abi: questEscrowAbi,
+      functionName: "refundPoster",
+      args: [questId],
+    });
+  }, [ensureConnected, writeContractAsync, questId]);
+
+  return {
+    accept,
+    submit,
+    approve,
+    claimTimeout,
+    cancel,
+    refund,
+    hash,
+    isPending,
+    isConfirming,
+    isSuccess,
+    error: writeError ?? receiptError,
+  };
 }
